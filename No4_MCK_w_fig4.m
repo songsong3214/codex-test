@@ -40,6 +40,8 @@ nd.alpha = -pi/4;      % 图4：alpha = -pi/4
 % 这个频率是为了让联合共振区域落在论文图4附近：Omega ≈ 0.036~0.040。
 % 联合共振中横向激励频率为 Omega/2，因此中心位置近似 Omega ≈ 2*omegaL。
 nd.omegaL_target = 0.0192;
+nd.Omega_span = 0.0024;  % 围绕 2*omegaL 自动扫频的半宽
+nd.Omega_points = 151;   % 奇数点保证正好包含 2*omegaL
 
 % 非线性三次刚度，主要控制幅值高度。
 % 幅值太大：增大 theta3；幅值太小：减小 theta3。
@@ -168,9 +170,12 @@ coef.theta2 = nd.theta2;
 coef.theta3 = nd.theta3;
 coef.F2 = nd.theta2;
 coef.F3 = nd.theta3;
-coef.Omega_min = 0.036;
-coef.Omega_max = 0.040;
 coef.Omega_center = 2*coef.omegaL;
+coef.Omega_span = nd.Omega_span;
+coef.Omega_min = coef.Omega_center - coef.Omega_span;
+coef.Omega_max = coef.Omega_center + coef.Omega_span;
+coef.Omega_points = nd.Omega_points;
+coef.model_note = '方案A：定性复现图4的无量纲调参模型；raw 仅作 Galerkin 推导参考。';
 coef.phy = phy;
 
 save('No4_coeff_fig4.mat', 'coef', 'raw');
@@ -186,5 +191,6 @@ fprintf('kq/Fbar   = %.6g\n', coef.kq);
 fprintf('theta2/F2 = %.6g\n', coef.theta2);
 fprintf('theta3/F3 = %.6g\n', coef.theta3);
 fprintf('alpha     = %.6g\n', coef.alpha);
-fprintf('扫频范围建议：Omega = %.4f 到 %.4f\n', coef.Omega_min, coef.Omega_max);
+fprintf('扫频范围建议：Omega = %.4f 到 %.4f，共 %d 点\n', coef.Omega_min, coef.Omega_max, coef.Omega_points);
+fprintf('说明：当前方案A使用无量纲调参模型；raw.F1_raw/F2_raw/F3_raw 只作推导参考，不直接进入 No6 积分。\n');
 end

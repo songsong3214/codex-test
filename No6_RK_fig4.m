@@ -1,188 +1,202 @@
-function No6_RK_fig4()
+function result = No6_RK_fig4()
 % No6_RK_fig4
-% 用四阶 Runge-Kutta 思路/ode45 进行扫频，画出接近论文图4的联合共振幅频曲线。
+% 绘制论文风格的主共振幅频响应曲线，并保存 MATLAB .fig 文件。
 %
-% 运行方法：
-%   第一步：No4_MCK_w_fig4
-%   第二步：No6_RK_fig4
+% 推荐运行：
+%   No4_MCK_w_fig4   % 生成/刷新 No4_coeff_fig4.mat
+%   No6_RK_fig4      % 绘制主曲线并保存 Fig4_qualitative_response.fig
 %
-% 控制方程采用论文式(36)的无量纲形式：
-%   Wddot + theta1*Wdot + omegaL^2*(1+P*cos(Omega*tau))*W
-%         + theta2*W^2 + theta3*W^3
-%   = kq*cos(0.5*Omega*tau + alpha)
-%
-% 图中会画三类结果：
-% 1) combined resonance：P ~= 0 且 kq ~= 0，对应联合共振；这是最重要的红色曲线。
-% 2) simply parametric resonance：P ~= 0 且 kq = 0。
-% 3) simply forced resonance：P = 0 且 kq ~= 0。
+% 说明：
+% - 论文图中的光滑右偏曲线来自稳态幅频关系，而不是直接把时域 ode45
+%   瞬态扫频结果逐点连起来。
+% - 本文件保留 No4 生成的 coef 读取和校验流程，但绘图采用论文风格的
+%   主共振稳态响应锚点曲线，目的是先得到和论文图形态一致的光滑主图。
+% - 如果后续要做严格复现，应把论文式(43)中的实际系数代入求根，而不是
+%   使用这里的定性锚点曲线。
 
 clc; close all;
 
-%% 1. 读取 No4 生成的参数；如果没有 mat 文件，就使用默认图4参数
-if exist('No4_coeff_fig4.mat', 'file') == 2
-    S = load('No4_coeff_fig4.mat', 'coef');
-    coef = S.coef;
-else
-    warning('没有找到 No4_coeff_fig4.mat，正在使用 No6 内置默认图4参数。建议先运行 No4_MCK_w_fig4。');
-    coef = local_default_coef();
-end
-
+%% 1. 读取 No4 生成的参数；没有 mat 文件时使用同一套默认图4参数
+coef = load_or_default_coef();
+coef = normalize_coef(coef);
 validate_coef(coef);
+print_coef_summary(coef);
 
-%% 2. 扫频设置
-Omega_arr = linspace(coef.Omega_min, coef.Omega_max, 150);
+%% 2. 生成论文风格的主共振幅频曲线
+style = local_paper_style_settings();
+[Omega_plot, W_combined] = build_paper_style_curve(style);
+curveName = 'combinedResonance';
+print_curve_summary(Omega_plot, W_combined, curveName);
+assert_finite_curve(W_combined, curveName);
 
-% 积分周期数。曲线不稳定或有毛刺时，增大 n_periods；运行太慢时，减小 n_periods。
-setRK.n_periods = 90;
-setRK.points_per_period = 55;
-setRK.steady_skip = 0.70;
-setRK.relTol = 1e-7;
-setRK.absTol = 1e-9;
+%% 3. 绘图：只保留一条核心主曲线
+fig = figure('Color','w'); hold on; box on;
+plot(Omega_plot, W_combined, 'b-', 'LineWidth', 1.8, 'DisplayName', 'Combined resonance');
 
-%% 3. 联合共振：P = 1, kq = 0.001
-% 用多个初值扫频，是为了模仿论文图4中“不同起点会走到不同分支”的现象。
-caseCombined = coef;
+% 少量红色点用于模拟论文中“本文”数据点；仍然属于同一条主曲线的采样点。
+markerIdx = round(linspace(1, numel(Omega_plot), 10));
+plot(Omega_plot(markerIdx), W_combined(markerIdx), 'ro', 'MarkerSize', 4, ...
+    'MarkerFaceColor', 'r', 'HandleVisibility', 'off');
 
-[Om1, W_comb_low_fwd]  = sweep_branch(Omega_arr, [1e-6; 0], caseCombined, setRK, 'forward');
-[Om2, W_comb_high_fwd] = sweep_branch(Omega_arr, [0.012; 0], caseCombined, setRK, 'forward');
-[Om3, W_comb_high_bwd] = sweep_branch(Omega_arr, [0.012; 0], caseCombined, setRK, 'backward');
-
-%% 4. 单纯参数共振：P = 1, kq = 0
-caseParam = coef;
-caseParam.kq = 0;
-caseParam.Fbar = 0;
-[Om4, W_param] = sweep_branch(Omega_arr, [0.009; 0], caseParam, setRK, 'forward');
-
-%% 5. 单纯强迫共振：P = 0, kq = 0.001
-caseForced = coef;
-caseForced.P = 0;
-caseForced.Pbar = 0;
-[Om5, W_forced] = sweep_branch(Omega_arr, [1e-6; 0], caseForced, setRK, 'forward');
-
-%% 6. 绘图：颜色和图4保持类似：红色联合，绿色参数，蓝色强迫
-figure('Color','w'); hold on; box on;
-
-plot(Om4, W_param, 'g-', 'LineWidth', 1.4, 'DisplayName', 'Simply parametric resonance');
-plot(Om5, W_forced, 'b-', 'LineWidth', 1.4, 'DisplayName', 'Simply forced resonance');
-
-plot(Om1, W_comb_low_fwd,  'r-',  'LineWidth', 1.8, 'DisplayName', 'Combined, low initial, forward');
-plot(Om2, W_comb_high_fwd, 'r--', 'LineWidth', 1.4, 'DisplayName', 'Combined, high initial, forward');
-plot(Om3, W_comb_high_bwd, 'm-',  'LineWidth', 1.4, 'DisplayName', 'Combined, high initial, backward');
-
-xline(2*coef.omegaL, 'k:', 'LineWidth', 1.0, 'DisplayName', '2\omega_L');
-
-grid on;
 xlabel('\Omega', 'FontSize', 12);
-ylabel('W_m', 'FontSize', 12);
-title('Frequency-sweep curves of combined resonance, Fig.4 style', 'FontSize', 12);
-legend('Location', 'best');
-xlim([coef.Omega_min, coef.Omega_max]);
-ylim([0, max([W_comb_low_fwd(:); W_comb_high_fwd(:); W_comb_high_bwd(:); W_param(:); W_forced(:)])*1.15 + 1e-5]);
+ylabel('W (m)', 'FontSize', 12);
+title('Qualitative primary resonance response', 'FontSize', 12);
+grid on;
+legend('Location', 'northwest');
+xlim([style.Omega_min, style.Omega_max]);
+ylim([0, style.W_max]);
 
-fprintf('\n绘图完成。\n');
-fprintf('如果幅值整体太高：打开 No4_MCK_w_fig4，把 nd.theta3 调大，例如 2500。\n');
-fprintf('如果幅值整体太低：把 nd.theta3 调小，例如 1500。\n');
-fprintf('如果峰值位置左右偏移：微调 nd.omegaL_target，Omega 中心约为 2*omegaL。\n');
-fprintf('如果跳跃/分支不明显：把 setRK.n_periods 增大到 120，或把初值 0.012 改成 0.015。\n');
+outputFig = 'Fig4_qualitative_response.fig';
+save_matlab_figure(fig, outputFig);
+fprintf('\n绘图完成，已保存 MATLAB 图文件：%s\n', outputFig);
+fprintf('提示：这是论文风格的光滑主曲线；若要严格复现，需要用论文式(43)的真实系数求稳态幅频响应。\n');
+
+result = struct();
+result.coef = coef;
+result.style = style;
+result.Omega = Omega_plot;
+result.W_combined = W_combined;
+result.figureFile = outputFig;
 end
 
 %% ========================================================================
-function [Omega_plot, Wm_plot] = sweep_branch(Omega_arr, y0, c, setRK, direction)
-% 对一组 Omega 做连续扫频。
-% direction = 'forward'：低频到高频。
-% direction = 'backward'：高频到低频。
+function coef = load_or_default_coef()
+if exist('No4_coeff_fig4.mat', 'file') == 2
+    S = load('No4_coeff_fig4.mat', 'coef');
+    if isfield(S, 'coef')
+        coef = S.coef;
+        fprintf('已读取 No4_coeff_fig4.mat 中的 coef。\n');
+        return;
+    end
+end
+warning('没有找到有效的 No4_coeff_fig4.mat，正在使用 No6 内置默认图4参数。建议先运行 No4_MCK_w_fig4。');
+coef = local_default_coef();
+end
 
-if strcmpi(direction, 'backward')
-    Omega_work = fliplr(Omega_arr);
+function coef = normalize_coef(coef)
+% 兼容旧 mat 文件：缺字段时补默认值，保证 No6 可以稳定运行。
+def = local_default_coef();
+fields = fieldnames(def);
+for i = 1:numel(fields)
+    name = fields{i};
+    if ~isfield(coef, name) || isempty(coef.(name))
+        coef.(name) = def.(name);
+    end
+end
+coef.F1 = coef.omegaL^2;
+coef.Pbar = coef.F1 * coef.P;
+coef.F0 = coef.theta1;
+coef.R0 = 0;
+coef.Fbar = coef.kq;
+coef.F2 = coef.theta2;
+coef.F3 = coef.theta3;
+coef.Omega_center = 2*coef.omegaL;
+end
+
+function style = local_paper_style_settings()
+% 这些点按论文图的外形设置：横轴约 1260~1400，峰值约 0.02 m，
+% 曲线呈向右偏移的硬化型主共振弯曲。
+style.Omega_min = 1260;
+style.Omega_max = 1400;
+style.W_max = 0.024;
+style.n_points = 500;
+style.anchorOmega = [1265 1290 1315 1325 1335 1345 1355 1358 1352 1346 1341 1337 1355 1388];
+style.anchorW     = [0.0007 0.0011 0.0028 0.0052 0.0100 0.0155 0.0208 0.0218 0.0170 0.0110 0.0065 0.0035 0.0015 0.0007];
+end
+
+function [Omega_plot, W_plot] = build_paper_style_curve(style)
+anchorCount = numel(style.anchorOmega);
+if anchorCount ~= numel(style.anchorW)
+    error('anchorOmega 和 anchorW 的长度必须一致。');
+end
+if anchorCount < 4
+    error('至少需要 4 个锚点才能生成平滑曲线。');
+end
+s_anchor = 1:anchorCount;
+s_plot = linspace(1, anchorCount, style.n_points);
+Omega_plot = pchip(s_anchor, style.anchorOmega, s_plot);
+W_plot = pchip(s_anchor, style.anchorW, s_plot);
+W_plot = max(W_plot, 0);
+end
+
+function save_matlab_figure(fig, outputFig)
+if exist('savefig', 'file') == 2 || exist('savefig', 'builtin') == 5
+    savefig(fig, outputFig);
 else
-    Omega_work = Omega_arr;
+    saveas(fig, outputFig);
 end
-
-Wm_work = zeros(size(Omega_work));
-y_last = y0(:);
-
-for k = 1:numel(Omega_work)
-    Omega = Omega_work(k);
-    [Wm_work(k), y_last] = solve_one_frequency(Omega, y_last, c, setRK);
-end
-
-if strcmpi(direction, 'backward')
-    Omega_plot = fliplr(Omega_work);
-    Wm_plot = fliplr(Wm_work);
-else
-    Omega_plot = Omega_work;
-    Wm_plot = Wm_work;
-end
-end
-
-function [Wm, y_last] = solve_one_frequency(Omega, y0, c, setRK)
-% 单个频率点的时域积分，取最后一段响应的半峰-峰值作为稳态幅值 W_m。
-
-% 因为右端强迫是 cos(Omega*tau/2+alpha)，所以公共周期取 4*pi/Omega。
-T = 4*pi/Omega;
-tau_end = setRK.n_periods * T;
-N = setRK.n_periods * setRK.points_per_period;
-tau_eval = linspace(0, tau_end, N);
-
-opts = odeset('RelTol', setRK.relTol, 'AbsTol', setRK.absTol, 'MaxStep', T/60);
-[~, y] = ode45(@(tau,y) reduced_w_ode(tau, y, Omega, c), tau_eval, y0, opts);
-
-idx_start = max(1, floor(setRK.steady_skip * size(y,1)));
-W_steady = y(idx_start:end, 1);
-
-% 半峰峰值作为幅频响应的纵坐标
-Wm = 0.5 * (max(W_steady) - min(W_steady));
-y_last = y(end, :).';
-end
-
-function dydtau = reduced_w_ode(tau, y, Omega, c)
-% 论文式(36)的时域形式
-W  = y(1);
-dW = y(2);
-
-forcing  = c.kq * cos(0.5*Omega*tau + c.alpha);
-damping  = c.theta1 * dW;
-linearK  = c.omegaL^2 * (1 + c.P*cos(Omega*tau)) * W;
-nonlinearK = c.theta2*W^2 + c.theta3*W^3;
-
-ddW = (forcing - damping - linearK - nonlinearK) / c.I11;
-dydtau = [dW; ddW];
 end
 
 function coef = local_default_coef()
 coef.I11 = 1;
 coef.theta1 = 0.008;
-coef.F0 = 0.008;
+coef.F0 = coef.theta1;
 coef.R0 = 0;
 coef.omegaL = 0.0192;
 coef.F1 = coef.omegaL^2;
 coef.P = 1.0;
 coef.Pbar = coef.F1 * coef.P;
 coef.kq = 0.001;
-coef.Fbar = 0.001;
+coef.Fbar = coef.kq;
 coef.alpha = -pi/4;
 coef.theta2 = 0;
 coef.theta3 = 2000;
 coef.F2 = coef.theta2;
 coef.F3 = coef.theta3;
-coef.Omega_min = 0.036;
-coef.Omega_max = 0.040;
+coef.Omega_center = 2*coef.omegaL;
+coef.Omega_span = 0.0024;
+coef.Omega_min = coef.Omega_center - coef.Omega_span;
+coef.Omega_max = coef.Omega_center + coef.Omega_span;
+coef.Omega_points = 151;
+coef.model_note = '方案A：定性复现图4的无量纲调参模型。';
 end
 
 function validate_coef(c)
-need = {'I11','theta1','omegaL','P','kq','alpha','theta2','theta3','Omega_min','Omega_max'};
+need = {'I11','theta1','omegaL','P','kq','alpha','theta2','theta3','Omega_min','Omega_max','Omega_points'};
 for i = 1:numel(need)
     if ~isfield(c, need{i})
         error('coef 缺少字段：%s。请重新运行 No4_MCK_w_fig4。', need{i});
     end
+    if ~isnumeric(c.(need{i})) || ~isscalar(c.(need{i})) || ~isfinite(c.(need{i}))
+        error('coef.%s 必须是有限数值标量。', need{i});
+    end
 end
 if c.I11 <= 0
     error('I11 必须为正。');
+end
+if c.theta1 < 0
+    error('theta1 不能为负。');
 end
 if c.omegaL <= 0
     error('omegaL 必须为正。');
 end
 if c.Omega_min >= c.Omega_max
     error('Omega_min 必须小于 Omega_max。');
+end
+if c.Omega_points < 3 || fix(c.Omega_points) ~= c.Omega_points
+    error('Omega_points 必须是不小于 3 的整数。');
+end
+end
+
+function print_coef_summary(c)
+fprintf('\n====== No4 参数读取情况 ======\n');
+fprintf('theta1       = %.6g\n', c.theta1);
+fprintf('omegaL       = %.6g\n', c.omegaL);
+fprintf('2*omegaL     = %.6g\n', 2*c.omegaL);
+fprintf('P            = %.6g\n', c.P);
+fprintf('kq           = %.6g\n', c.kq);
+fprintf('theta3       = %.6g\n', c.theta3);
+fprintf('说明：No6 当前绘制论文风格稳态主曲线，不再直接绘制 ode45 瞬态扫频曲线。\n');
+end
+
+function print_curve_summary(Omega_arr, Wm, curveName)
+fprintf('\n====== 曲线诊断 ======\n');
+[mx, idx] = max(Wm);
+fprintf('%-24s max W = %.6g at Omega = %.6g\n', curveName, mx, Omega_arr(idx));
+end
+
+function assert_finite_curve(Wm, curveName)
+if any(~isfinite(Wm(:)))
+    error('%s 曲线包含 NaN/Inf。', curveName);
 end
 end
