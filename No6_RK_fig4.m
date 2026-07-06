@@ -1,97 +1,174 @@
-function No6_RK_fig4()
+function result = No6_RK_fig4()
 % No6_RK_fig4
-% 用四阶 Runge-Kutta 思路/ode45 进行扫频，画出接近论文图4的联合共振幅频曲线。
+% 用 ode45 做无量纲单自由度方程扫频，定性复现论文图4的联合共振幅频曲线。
 %
-% 运行方法：
-%   第一步：No4_MCK_w_fig4
-%   第二步：No6_RK_fig4
+% 推荐运行：
+%   No4_MCK_w_fig4   % 生成/刷新 No4_coeff_fig4.mat
+%   No6_RK_fig4      % 扫频、绘图并保存 Fig4_qualitative_response.png
 %
-% 控制方程采用论文式(36)的无量纲形式：
+% 方案A说明：
+% - 本文件采用调图用的无量纲模型，不直接使用 No4 中 raw.F1_raw/F2_raw/F3_raw。
+% - No4 负责统一模态、保存参数和说明；No6 负责稳健扫频、诊断和出图。
+%
+% 控制方程：
 %   Wddot + theta1*Wdot + omegaL^2*(1+P*cos(Omega*tau))*W
 %         + theta2*W^2 + theta3*W^3
 %   = kq*cos(0.5*Omega*tau + alpha)
 %
-% 图中会画三类结果：
-% 1) combined resonance：P ~= 0 且 kq ~= 0，对应联合共振；这是最重要的红色曲线。
+% 图中三类曲线：
+% 1) combined resonance：P ~= 0 且 kq ~= 0。
 % 2) simply parametric resonance：P ~= 0 且 kq = 0。
 % 3) simply forced resonance：P = 0 且 kq ~= 0。
 
 clc; close all;
 
-%% 1. 读取 No4 生成的参数；如果没有 mat 文件，就使用默认图4参数
-if exist('No4_coeff_fig4.mat', 'file') == 2
-    S = load('No4_coeff_fig4.mat', 'coef');
-    coef = S.coef;
-else
-    warning('没有找到 No4_coeff_fig4.mat，正在使用 No6 内置默认图4参数。建议先运行 No4_MCK_w_fig4。');
-    coef = local_default_coef();
-end
-
+%% 1. 读取 No4 生成的参数；没有 mat 文件时使用同一套默认图4参数
+coef = load_or_default_coef();
+coef = normalize_coef(coef);
 validate_coef(coef);
+print_coef_summary(coef);
 
 %% 2. 扫频设置
-Omega_arr = linspace(coef.Omega_min, coef.Omega_max, 150);
+Omega_arr = build_omega_grid(coef);
+setRK = local_rk_settings();
 
-% 积分周期数。曲线不稳定或有毛刺时，增大 n_periods；运行太慢时，减小 n_periods。
-setRK.n_periods = 90;
-setRK.points_per_period = 55;
-setRK.steady_skip = 0.70;
-setRK.relTol = 1e-7;
-setRK.absTol = 1e-9;
+fprintf('\n====== 扫频设置 ======\n');
+fprintf('Omega 点数        = %d\n', numel(Omega_arr));
+fprintf('Omega 范围        = %.6g 到 %.6g\n', Omega_arr(1), Omega_arr(end));
+fprintf('中心频率 2omegaL  = %.6g\n', 2*coef.omegaL);
+fprintf('积分周期数        = %d\n', setRK.n_periods);
+fprintf('每周期采样点      = %d\n', setRK.points_per_period);
+fprintf('稳态截取比例      = %.2f\n', setRK.steady_skip);
 
 %% 3. 联合共振：P = 1, kq = 0.001
-% 用多个初值扫频，是为了模仿论文图4中“不同起点会走到不同分支”的现象。
 caseCombined = coef;
+[Om1, W_comb_low_fwd]  = sweep_branch(Omega_arr, [1e-6; 0], caseCombined, setRK, 'forward',  'combined low forward');
+[Om2, W_comb_high_fwd] = sweep_branch(Omega_arr, [0.012; 0], caseCombined, setRK, 'forward',  'combined high forward');
+[Om3, W_comb_high_bwd] = sweep_branch(Omega_arr, [0.012; 0], caseCombined, setRK, 'backward', 'combined high backward');
 
-[Om1, W_comb_low_fwd]  = sweep_branch(Omega_arr, [1e-6; 0], caseCombined, setRK, 'forward');
-[Om2, W_comb_high_fwd] = sweep_branch(Omega_arr, [0.012; 0], caseCombined, setRK, 'forward');
-[Om3, W_comb_high_bwd] = sweep_branch(Omega_arr, [0.012; 0], caseCombined, setRK, 'backward');
-
-%% 4. 单纯参数共振：P = 1, kq = 0
+%% 4. 单纯参数共振：P ~= 0, kq = 0
 caseParam = coef;
 caseParam.kq = 0;
 caseParam.Fbar = 0;
-[Om4, W_param] = sweep_branch(Omega_arr, [0.009; 0], caseParam, setRK, 'forward');
+[Om4, W_param] = sweep_branch(Omega_arr, [0.009; 0], caseParam, setRK, 'forward', 'parametric only');
 
-%% 5. 单纯强迫共振：P = 0, kq = 0.001
+%% 5. 单纯强迫共振：P = 0, kq ~= 0
 caseForced = coef;
 caseForced.P = 0;
 caseForced.Pbar = 0;
-[Om5, W_forced] = sweep_branch(Omega_arr, [1e-6; 0], caseForced, setRK, 'forward');
+[Om5, W_forced] = sweep_branch(Omega_arr, [1e-6; 0], caseForced, setRK, 'forward', 'forced only');
 
-%% 6. 绘图：颜色和图4保持类似：红色联合，绿色参数，蓝色强迫
-figure('Color','w'); hold on; box on;
+%% 6. 诊断和绘图
+curves = struct();
+curves.combinedLowForward = W_comb_low_fwd;
+curves.combinedHighForward = W_comb_high_fwd;
+curves.combinedHighBackward = W_comb_high_bwd;
+curves.parametricOnly = W_param;
+curves.forcedOnly = W_forced;
+print_curve_summary(Omega_arr, curves);
+assert_finite_curves(curves);
 
+fig = figure('Color','w'); hold on; box on;
 plot(Om4, W_param, 'g-', 'LineWidth', 1.4, 'DisplayName', 'Simply parametric resonance');
 plot(Om5, W_forced, 'b-', 'LineWidth', 1.4, 'DisplayName', 'Simply forced resonance');
-
 plot(Om1, W_comb_low_fwd,  'r-',  'LineWidth', 1.8, 'DisplayName', 'Combined, low initial, forward');
 plot(Om2, W_comb_high_fwd, 'r--', 'LineWidth', 1.4, 'DisplayName', 'Combined, high initial, forward');
 plot(Om3, W_comb_high_bwd, 'm-',  'LineWidth', 1.4, 'DisplayName', 'Combined, high initial, backward');
-
-xline(2*coef.omegaL, 'k:', 'LineWidth', 1.0, 'DisplayName', '2\omega_L');
+plot_reference_line(2*coef.omegaL, '2\omega_L');
 
 grid on;
 xlabel('\Omega', 'FontSize', 12);
 ylabel('W_m', 'FontSize', 12);
-title('Frequency-sweep curves of combined resonance, Fig.4 style', 'FontSize', 12);
+title('Qualitative frequency-sweep curves of combined resonance', 'FontSize', 12);
 legend('Location', 'best');
-xlim([coef.Omega_min, coef.Omega_max]);
-ylim([0, max([W_comb_low_fwd(:); W_comb_high_fwd(:); W_comb_high_bwd(:); W_param(:); W_forced(:)])*1.15 + 1e-5]);
+xlim([Omega_arr(1), Omega_arr(end)]);
+ymax = max_curve_value(curves);
+if ymax <= 0
+    ymax = 1e-4;
+end
+ylim([0, ymax*1.15 + 1e-5]);
 
-fprintf('\n绘图完成。\n');
-fprintf('如果幅值整体太高：打开 No4_MCK_w_fig4，把 nd.theta3 调大，例如 2500。\n');
-fprintf('如果幅值整体太低：把 nd.theta3 调小，例如 1500。\n');
-fprintf('如果峰值位置左右偏移：微调 nd.omegaL_target，Omega 中心约为 2*omegaL。\n');
-fprintf('如果跳跃/分支不明显：把 setRK.n_periods 增大到 120，或把初值 0.012 改成 0.015。\n');
+outputPng = 'Fig4_qualitative_response.png';
+try
+    exportgraphics(fig, outputPng, 'Resolution', 200);
+catch
+    saveas(fig, outputPng);
+end
+fprintf('\n绘图完成，已保存：%s\n', outputPng);
+fprintf('调参建议：峰值位置看 omegaL；幅值大小看 theta3/kq；分支明显程度看 P、初值和 n_periods。\n');
+
+result = struct();
+result.coef = coef;
+result.setRK = setRK;
+result.Omega = Omega_arr;
+result.curves = curves;
+result.figureFile = outputPng;
 end
 
 %% ========================================================================
-function [Omega_plot, Wm_plot] = sweep_branch(Omega_arr, y0, c, setRK, direction)
-% 对一组 Omega 做连续扫频。
-% direction = 'forward'：低频到高频。
-% direction = 'backward'：高频到低频。
 
+function plot_reference_line(xValue, labelText)
+% 兼容较老 MATLAB：新版本用 xline，旧版本退回到普通 plot 竖线。
+if exist('xline', 'file') == 2 || exist('xline', 'builtin') == 5
+    xline(xValue, 'k:', 'LineWidth', 1.0, 'DisplayName', labelText);
+else
+    yl = ylim;
+    plot([xValue xValue], yl, 'k:', 'LineWidth', 1.0, 'DisplayName', labelText);
+    ylim(yl);
+end
+end
+
+function coef = load_or_default_coef()
+if exist('No4_coeff_fig4.mat', 'file') == 2
+    S = load('No4_coeff_fig4.mat', 'coef');
+    if isfield(S, 'coef')
+        coef = S.coef;
+        fprintf('已读取 No4_coeff_fig4.mat 中的 coef。\n');
+        return;
+    end
+end
+warning('没有找到有效的 No4_coeff_fig4.mat，正在使用 No6 内置默认图4参数。建议先运行 No4_MCK_w_fig4。');
+coef = local_default_coef();
+end
+
+function coef = normalize_coef(coef)
+% 兼容旧 mat 文件：缺字段时补默认值，保证 No6 可以稳定运行。
+def = local_default_coef();
+fields = fieldnames(def);
+for i = 1:numel(fields)
+    name = fields{i};
+    if ~isfield(coef, name) || isempty(coef.(name))
+        coef.(name) = def.(name);
+    end
+end
+coef.F1 = coef.omegaL^2;
+coef.Pbar = coef.F1 * coef.P;
+coef.F0 = coef.theta1;
+coef.R0 = 0;
+coef.Fbar = coef.kq;
+coef.F2 = coef.theta2;
+coef.F3 = coef.theta3;
+coef.Omega_center = 2*coef.omegaL;
+end
+
+function Omega_arr = build_omega_grid(coef)
+if isfield(coef, 'Omega_points') && ~isempty(coef.Omega_points)
+    nOmega = coef.Omega_points;
+else
+    nOmega = 151;
+end
+Omega_arr = linspace(coef.Omega_min, coef.Omega_max, nOmega);
+end
+
+function setRK = local_rk_settings()
+setRK.n_periods = 120;
+setRK.points_per_period = 60;
+setRK.steady_skip = 0.75;
+setRK.relTol = 1e-7;
+setRK.absTol = 1e-9;
+end
+
+function [Omega_plot, Wm_plot] = sweep_branch(Omega_arr, y0, c, setRK, direction, label)
 if strcmpi(direction, 'backward')
     Omega_work = fliplr(Omega_arr);
 else
@@ -100,10 +177,14 @@ end
 
 Wm_work = zeros(size(Omega_work));
 y_last = y0(:);
+fprintf('开始扫频：%s ...\n', label);
 
 for k = 1:numel(Omega_work)
     Omega = Omega_work(k);
     [Wm_work(k), y_last] = solve_one_frequency(Omega, y_last, c, setRK);
+    if mod(k, max(1, floor(numel(Omega_work)/5))) == 0 || k == numel(Omega_work)
+        fprintf('  %s: %d/%d, Omega=%.6g, Wm=%.6g\n', label, k, numel(Omega_work), Omega, Wm_work(k));
+    end
 end
 
 if strcmpi(direction, 'backward')
@@ -116,35 +197,32 @@ end
 end
 
 function [Wm, y_last] = solve_one_frequency(Omega, y0, c, setRK)
-% 单个频率点的时域积分，取最后一段响应的半峰-峰值作为稳态幅值 W_m。
-
-% 因为右端强迫是 cos(Omega*tau/2+alpha)，所以公共周期取 4*pi/Omega。
+% 因为右端强迫是 cos(Omega*tau/2+alpha)，公共周期取 4*pi/Omega。
 T = 4*pi/Omega;
 tau_end = setRK.n_periods * T;
 N = setRK.n_periods * setRK.points_per_period;
 tau_eval = linspace(0, tau_end, N);
 
-opts = odeset('RelTol', setRK.relTol, 'AbsTol', setRK.absTol, 'MaxStep', T/60);
+opts = odeset('RelTol', setRK.relTol, 'AbsTol', setRK.absTol, 'MaxStep', T/80);
 [~, y] = ode45(@(tau,y) reduced_w_ode(tau, y, Omega, c), tau_eval, y0, opts);
+
+if any(~isfinite(y(:)))
+    error('Omega=%.6g 时积分出现 NaN/Inf，请减小 kq/P 或增大 theta3。', Omega);
+end
 
 idx_start = max(1, floor(setRK.steady_skip * size(y,1)));
 W_steady = y(idx_start:end, 1);
-
-% 半峰峰值作为幅频响应的纵坐标
 Wm = 0.5 * (max(W_steady) - min(W_steady));
 y_last = y(end, :).';
 end
 
 function dydtau = reduced_w_ode(tau, y, Omega, c)
-% 论文式(36)的时域形式
 W  = y(1);
 dW = y(2);
-
 forcing  = c.kq * cos(0.5*Omega*tau + c.alpha);
 damping  = c.theta1 * dW;
 linearK  = c.omegaL^2 * (1 + c.P*cos(Omega*tau)) * W;
 nonlinearK = c.theta2*W^2 + c.theta3*W^3;
-
 ddW = (forcing - damping - linearK - nonlinearK) / c.I11;
 dydtau = [dW; ddW];
 end
@@ -152,37 +230,92 @@ end
 function coef = local_default_coef()
 coef.I11 = 1;
 coef.theta1 = 0.008;
-coef.F0 = 0.008;
+coef.F0 = coef.theta1;
 coef.R0 = 0;
 coef.omegaL = 0.0192;
 coef.F1 = coef.omegaL^2;
 coef.P = 1.0;
 coef.Pbar = coef.F1 * coef.P;
 coef.kq = 0.001;
-coef.Fbar = 0.001;
+coef.Fbar = coef.kq;
 coef.alpha = -pi/4;
 coef.theta2 = 0;
 coef.theta3 = 2000;
 coef.F2 = coef.theta2;
 coef.F3 = coef.theta3;
-coef.Omega_min = 0.036;
-coef.Omega_max = 0.040;
+coef.Omega_center = 2*coef.omegaL;
+coef.Omega_span = 0.0024;
+coef.Omega_min = coef.Omega_center - coef.Omega_span;
+coef.Omega_max = coef.Omega_center + coef.Omega_span;
+coef.Omega_points = 151;
+coef.model_note = '方案A：定性复现图4的无量纲调参模型。';
 end
 
 function validate_coef(c)
-need = {'I11','theta1','omegaL','P','kq','alpha','theta2','theta3','Omega_min','Omega_max'};
+need = {'I11','theta1','omegaL','P','kq','alpha','theta2','theta3','Omega_min','Omega_max','Omega_points'};
 for i = 1:numel(need)
     if ~isfield(c, need{i})
         error('coef 缺少字段：%s。请重新运行 No4_MCK_w_fig4。', need{i});
     end
+    if ~isnumeric(c.(need{i})) || ~isscalar(c.(need{i})) || ~isfinite(c.(need{i}))
+        error('coef.%s 必须是有限数值标量。', need{i});
+    end
 end
 if c.I11 <= 0
     error('I11 必须为正。');
+end
+if c.theta1 < 0
+    error('theta1 不能为负。');
 end
 if c.omegaL <= 0
     error('omegaL 必须为正。');
 end
 if c.Omega_min >= c.Omega_max
     error('Omega_min 必须小于 Omega_max。');
+end
+if c.Omega_points < 3 || fix(c.Omega_points) ~= c.Omega_points
+    error('Omega_points 必须是不小于 3 的整数。');
+end
+end
+
+function print_coef_summary(c)
+fprintf('\n====== 图4定性复现参数 ======\n');
+fprintf('I11          = %.6g\n', c.I11);
+fprintf('theta1       = %.6g\n', c.theta1);
+fprintf('omegaL       = %.6g\n', c.omegaL);
+fprintf('2*omegaL     = %.6g\n', 2*c.omegaL);
+fprintf('P            = %.6g\n', c.P);
+fprintf('kq           = %.6g\n', c.kq);
+fprintf('alpha        = %.6g\n', c.alpha);
+fprintf('theta2       = %.6g\n', c.theta2);
+fprintf('theta3       = %.6g\n', c.theta3);
+fprintf('Omega_min/max= %.6g / %.6g\n', c.Omega_min, c.Omega_max);
+end
+
+function print_curve_summary(Omega_arr, curves)
+names = fieldnames(curves);
+fprintf('\n====== 曲线诊断 ======\n');
+for i = 1:numel(names)
+    y = curves.(names{i});
+    [mx, idx] = max(y);
+    fprintf('%-24s max Wm = %.6g at Omega = %.6g\n', names{i}, mx, Omega_arr(idx));
+end
+end
+
+function assert_finite_curves(curves)
+names = fieldnames(curves);
+for i = 1:numel(names)
+    y = curves.(names{i});
+    if any(~isfinite(y(:)))
+        error('%s 曲线包含 NaN/Inf。', names{i});
+    end
+end
+end
+
+function ymax = max_curve_value(curves)
+names = fieldnames(curves);
+ymax = 0;
+for i = 1:numel(names)
+    ymax = max(ymax, max(curves.(names{i})(:)));
 end
 end
