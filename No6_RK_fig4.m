@@ -1,10 +1,10 @@
 function result = No6_RK_fig4()
 % No6_RK_fig4
-% 用 ode45 做无量纲单自由度方程扫频，定性复现论文图4的联合共振幅频曲线。
+% 用 ode45 按控制方程进行单条联合共振扫频，并保存 MATLAB .fig 文件。
 %
 % 推荐运行：
 %   No4_MCK_w_fig4   % 生成/刷新 No4_coeff_fig4.mat
-%   No6_RK_fig4      % 扫频、绘图并保存 Fig4_qualitative_response.png
+%   No6_RK_fig4      % 扫频、绘图并保存 Fig4_qualitative_response.fig
 %
 % 方案A说明：
 % - 本文件采用调图用的无量纲模型，不直接使用 No4 中 raw.F1_raw/F2_raw/F3_raw。
@@ -15,10 +15,8 @@ function result = No6_RK_fig4()
 %         + theta2*W^2 + theta3*W^3
 %   = kq*cos(0.5*Omega*tau + alpha)
 %
-% 图中三类曲线：
-% 1) combined resonance：P ~= 0 且 kq ~= 0。
-% 2) simply parametric resonance：P ~= 0 且 kq = 0。
-% 3) simply forced resonance：P = 0 且 kq ~= 0。
+% 图中只绘制一条核心曲线：
+% combined resonance：P ~= 0 且 kq ~= 0。
 
 clc; close all;
 
@@ -40,72 +38,53 @@ fprintf('积分周期数        = %d\n', setRK.n_periods);
 fprintf('每周期采样点      = %d\n', setRK.points_per_period);
 fprintf('稳态截取比例      = %.2f\n', setRK.steady_skip);
 
-%% 3. 联合共振：P = 1, kq = 0.001
+%% 3. 核心联合共振曲线：P ~= 0, kq ~= 0
 caseCombined = coef;
-[Om1, W_comb_low_fwd]  = sweep_branch(Omega_arr, [1e-6; 0], caseCombined, setRK, 'forward',  'combined low forward');
-[Om2, W_comb_high_fwd] = sweep_branch(Omega_arr, [0.012; 0], caseCombined, setRK, 'forward',  'combined high forward');
-[Om3, W_comb_high_bwd] = sweep_branch(Omega_arr, [0.012; 0], caseCombined, setRK, 'backward', 'combined high backward');
+[Omega_plot, W_combined] = sweep_branch(Omega_arr, [1e-6; 0], caseCombined, setRK, 'forward', 'combined resonance');
 
-%% 4. 单纯参数共振：P ~= 0, kq = 0
-caseParam = coef;
-caseParam.kq = 0;
-caseParam.Fbar = 0;
-[Om4, W_param] = sweep_branch(Omega_arr, [0.009; 0], caseParam, setRK, 'forward', 'parametric only');
-
-%% 5. 单纯强迫共振：P = 0, kq ~= 0
-caseForced = coef;
-caseForced.P = 0;
-caseForced.Pbar = 0;
-[Om5, W_forced] = sweep_branch(Omega_arr, [1e-6; 0], caseForced, setRK, 'forward', 'forced only');
-
-%% 6. 诊断和绘图
-curves = struct();
-curves.combinedLowForward = W_comb_low_fwd;
-curves.combinedHighForward = W_comb_high_fwd;
-curves.combinedHighBackward = W_comb_high_bwd;
-curves.parametricOnly = W_param;
-curves.forcedOnly = W_forced;
-print_curve_summary(Omega_arr, curves);
-assert_finite_curves(curves);
+%% 4. 诊断和绘图
+curveName = 'combinedResonance';
+print_curve_summary(Omega_plot, W_combined, curveName);
+assert_finite_curve(W_combined, curveName);
 
 fig = figure('Color','w'); hold on; box on;
-plot(Om4, W_param, 'g-', 'LineWidth', 1.4, 'DisplayName', 'Simply parametric resonance');
-plot(Om5, W_forced, 'b-', 'LineWidth', 1.4, 'DisplayName', 'Simply forced resonance');
-plot(Om1, W_comb_low_fwd,  'r-',  'LineWidth', 1.8, 'DisplayName', 'Combined, low initial, forward');
-plot(Om2, W_comb_high_fwd, 'r--', 'LineWidth', 1.4, 'DisplayName', 'Combined, high initial, forward');
-plot(Om3, W_comb_high_bwd, 'm-',  'LineWidth', 1.4, 'DisplayName', 'Combined, high initial, backward');
+plot(Omega_plot, W_combined, 'r-', 'LineWidth', 1.8, 'DisplayName', 'Combined resonance');
 plot_reference_line(2*coef.omegaL, '2\omega_L');
 
 grid on;
 xlabel('\Omega', 'FontSize', 12);
 ylabel('W_m', 'FontSize', 12);
-title('Qualitative frequency-sweep curves of combined resonance', 'FontSize', 12);
+title('Qualitative frequency-sweep curve of combined resonance', 'FontSize', 12);
 legend('Location', 'best');
 xlim([Omega_arr(1), Omega_arr(end)]);
-ymax = max_curve_value(curves);
+ymax = max(W_combined(:));
 if ymax <= 0
     ymax = 1e-4;
 end
 ylim([0, ymax*1.15 + 1e-5]);
 
-outputPng = 'Fig4_qualitative_response.png';
-try
-    exportgraphics(fig, outputPng, 'Resolution', 200);
-catch
-    saveas(fig, outputPng);
-end
-fprintf('\n绘图完成，已保存：%s\n', outputPng);
-fprintf('调参建议：峰值位置看 omegaL；幅值大小看 theta3/kq；分支明显程度看 P、初值和 n_periods。\n');
+outputFig = 'Fig4_qualitative_response.fig';
+save_matlab_figure(fig, outputFig);
+fprintf('\n绘图完成，已保存 MATLAB 图文件：%s\n', outputFig);
+fprintf('调参建议：峰值位置看 omegaL；幅值大小看 theta3/kq；曲线平滑度看 n_periods。\n');
 
 result = struct();
 result.coef = coef;
 result.setRK = setRK;
-result.Omega = Omega_arr;
-result.curves = curves;
-result.figureFile = outputPng;
+result.Omega = Omega_plot;
+result.W_combined = W_combined;
+result.figureFile = outputFig;
 end
 
 %% ========================================================================
+
+function save_matlab_figure(fig, outputFig)
+if exist('savefig', 'file') == 2 || exist('savefig', 'builtin') == 5
+    savefig(fig, outputFig);
+else
+    saveas(fig, outputFig);
+end
+end
 
 function plot_reference_line(xValue, labelText)
 % 兼容较老 MATLAB：新版本用 xline，旧版本退回到普通 plot 竖线。
@@ -292,30 +271,14 @@ fprintf('theta3       = %.6g\n', c.theta3);
 fprintf('Omega_min/max= %.6g / %.6g\n', c.Omega_min, c.Omega_max);
 end
 
-function print_curve_summary(Omega_arr, curves)
-names = fieldnames(curves);
+function print_curve_summary(Omega_arr, Wm, curveName)
 fprintf('\n====== 曲线诊断 ======\n');
-for i = 1:numel(names)
-    y = curves.(names{i});
-    [mx, idx] = max(y);
-    fprintf('%-24s max Wm = %.6g at Omega = %.6g\n', names{i}, mx, Omega_arr(idx));
-end
+[mx, idx] = max(Wm);
+fprintf('%-24s max Wm = %.6g at Omega = %.6g\n', curveName, mx, Omega_arr(idx));
 end
 
-function assert_finite_curves(curves)
-names = fieldnames(curves);
-for i = 1:numel(names)
-    y = curves.(names{i});
-    if any(~isfinite(y(:)))
-        error('%s 曲线包含 NaN/Inf。', names{i});
-    end
-end
-end
-
-function ymax = max_curve_value(curves)
-names = fieldnames(curves);
-ymax = 0;
-for i = 1:numel(names)
-    ymax = max(ymax, max(curves.(names{i})(:)));
+function assert_finite_curve(Wm, curveName)
+if any(~isfinite(Wm(:)))
+    error('%s 曲线包含 NaN/Inf。', curveName);
 end
 end
